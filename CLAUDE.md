@@ -114,3 +114,44 @@ aws lambda delete-function --function-name lambda-project-2 --region us-east-1
 aws iam detach-role-policy --role-name lambda-execution-role --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
 aws iam delete-role --role-name lambda-execution-role
 ```
+
+---
+
+## Destroy All Resources
+
+> **Warning:** These commands are irreversible. Run only after confirming nothing is in use.
+
+### AWS
+```bash
+# Delete Lambda function
+aws lambda delete-function --function-name lambda-project-2 --region us-east-1
+
+# Delete IAM role
+aws iam detach-role-policy \
+  --role-name lambda-execution-role \
+  --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+aws iam delete-role --role-name lambda-execution-role
+
+# Delete CloudWatch log group
+aws logs delete-log-group --log-group-name /aws/lambda/lambda-project-2 --region us-east-1
+```
+
+### Azure
+```bash
+# Delete entire resource group (removes Function App, Storage Account, App Insights, Consumption Plan)
+az group delete --name lambda-project-2-rg --yes --no-wait
+
+# Also delete the awsazmigrationdemo resource group if no longer needed
+az group delete --name awsazmigrationdemo --yes --no-wait
+```
+
+### Verify Cleanup
+```bash
+# AWS
+aws lambda get-function --function-name lambda-project-2 --region us-east-1 2>&1
+aws iam get-role --role-name lambda-execution-role 2>&1
+
+# Azure
+az group show --name lambda-project-2-rg 2>&1
+az group show --name awsazmigrationdemo 2>&1
+```
