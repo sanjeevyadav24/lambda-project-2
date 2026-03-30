@@ -4,81 +4,70 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-Single AWS Lambda function (`lambda_function.py`) with handler `lambda_function.lambda_handler`. No framework, no dependencies.
+Single AWS Lambda function (`lambda_function.py`) migrated to Azure Functions (`function_app.py`). Python 3.12, no custom dependencies.
 
-## Commands
+## Architecture
 
-**Test locally:**
+| File | Purpose |
+|---|---|
+| `lambda_function.py` | Original AWS Lambda handler |
+| `function_app.py` | Azure Functions HTTP trigger (v2 model) |
+| `host.json` | Azure Functions runtime config |
+| `requirements.txt` | `azure-functions` dependency |
+| `event.json` | Local test payload |
+| `load_env.sh` | Resolves AWS account ID via CLI and exports env vars |
+| `.env` | Local env vars — **never commit** |
+
+## AWS Lambda
+
 ```bash
+# Test locally
 python3 -c "import json; from lambda_function import lambda_handler; print(lambda_handler(json.load(open('event.json')), None))"
-```
 
-**Package:**
-```bash
-zip function.zip lambda_function.py
-# With dependencies:
-pip install -r requirements.txt -t package/ && cd package && zip -r ../function.zip . && cd .. && zip function.zip lambda_function.py
-```
-
-**First deploy:**
-```bash
-aws lambda create-function \
-  --function-name lambda-project-2 \
-  --runtime python3.12 \
-  --role arn:aws:iam::<account-id>:role/<execution-role> \
-  --handler lambda_function.lambda_handler \
-  --zip-file fileb://function.zip \
-  --region us-east-1
-```
-
-**Update code:**
-```bash
+# Package & deploy
+python3 -c "import zipfile; z=zipfile.ZipFile('function.zip','w'); z.write('lambda_function.py'); z.close()"
 aws lambda update-function-code --function-name lambda-project-2 --zip-file fileb://function.zip --region us-east-1
-```
 
-**Invoke & check logs:**
-```bash
+# Invoke & logs
 aws lambda invoke --function-name lambda-project-2 --payload file://event.json --cli-binary-format raw-in-base64-out response.json --region us-east-1
 aws logs tail /aws/lambda/lambda-project-2 --follow
 ```
 
-## Architecture
+## Azure Functions
 
-- `lambda_function.py` — sole entry point; returns `{"statusCode": 200, "body": ...}`
-- `event.json` — test payload passed as `event` parameter during local testing
-- `requirements.txt` — empty; add packages here before packaging
+```bash
+# Test locally
+func start
+curl http://localhost:7071/api/hello
 
-# Migration: AWS Lambda → Azure Functions
+# Deploy
+func azure functionapp publish lambda-project-2-fn
+
+# Verify
+curl "https://lambda-project-2-fn.azurewebsites.net/api/hello?code=<function-key>"
+```
+
+Live endpoint: `https://lambda-project-2-fn.azurewebsites.net/api/hello`
+Azure resource group: `lambda-project-2-rg` (centralindia)
+
+---
+
+## Migration: AWS Lambda → Azure Functions
 
 Reference: https://learn.microsoft.com/en-us/azure/azure-functions/migration/migrate-aws-lambda-to-azure-functions
 
-## Step 1 — Assess the Lambda Function
-- Runtime: `python3.12` → Azure Functions supports Python 3.9–3.13 ✓
-- Handler: `lambda_function.lambda_handler` → becomes `@app.route()` decorator in Azure Functions v2 model
-- No dependencies → `requirements.txt` needs `azure-functions` added
-- No VPC, no layers → straightforward migration
-
-## Step 2 — Map AWS → Azure Concepts
+### AWS → Azure Concepts
 | AWS Lambda | Azure Functions |
 |---|---|
-| `lambda_handler(event, context)` | `def fn(req: func.HttpRequest)` with `@app.route()` |
+| `lambda_handler(event, context)` | `@app.route()` + `func.HttpRequest` |
 | API Gateway HTTP trigger | HTTP trigger (built-in) |
 | CloudWatch Logs | Application Insights |
 | IAM execution role | Managed Identity + RBAC |
-| `event.json` test payload | `func start` + curl locally |
 
-## Step 3 — Rewrite Handler for Azure
-
-**Current (`lambda_function.py`):**
+### Step 1 — Rewrite Handler
 ```python
-def lambda_handler(event, context):
-    return {"statusCode": 200, "body": json.dumps("Hello from Lambda!")}
-```
-
-**Migrated (`function_app.py`):**
-```python
+# Azure (function_app.py)
 import azure.functions as func
-
 app = func.FunctionApp()
 
 @app.route(route="hello", methods=["GET", "POST"])
@@ -86,82 +75,40 @@ def lambda_handler(req: func.HttpRequest) -> func.HttpResponse:
     return func.HttpResponse("Hello from Azure Functions!", status_code=200)
 ```
 
-## Step 4 — Scaffold Azure Functions Project
-
+### Step 2 — Scaffold Project
 ```bash
-# Install tooling
 npm install -g azure-functions-core-tools@4
-pip install azure-functions
-
-# Init project
 func init . --worker-runtime python --model V2
-
-# Add the function file
-# Create function_app.py with the migrated handler above
 ```
 
-`requirements.txt`:
-```
-azure-functions
-```
-
-`host.json`:
-```json
-{
-  "version": "2.0",
-  "extensionBundle": {
-    "id": "Microsoft.Azure.Functions.ExtensionBundle",
-    "version": "[4.*, 5.0.0)"
-  }
-}
-```
-
-## Step 5 — Create Azure Resources
-
+### Step 3 — Create Azure Resources
 ```bash
 az group create --name lambda-project-2-rg --location centralindia
-az storage account create --name lp2storage --resource-group lambda-project-2-rg --sku Standard_LRS --location centralindia
+az storage account create --name lp2storage248 --resource-group lambda-project-2-rg --sku Standard_LRS --location centralindia
 az functionapp create \
   --resource-group lambda-project-2-rg \
   --name lambda-project-2-fn \
-  --storage-account lp2storage \
+  --storage-account lp2storage248 \
   --consumption-plan-location centralindia \
   --runtime python --runtime-version 3.12 \
   --functions-version 4 --os-type linux
 ```
 
-## Step 6 — Migrate Environment Variables
-
+### Step 4 — Migrate Environment Variables
 ```bash
-# Read from .env and apply to Azure
 az functionapp config appsettings set \
   --name lambda-project-2-fn \
   --resource-group lambda-project-2-rg \
   --settings ENV=production LOG_LEVEL=INFO
 ```
 
-## Step 7 — Test Locally
-
-```bash
-func start
-curl http://localhost:7071/api/hello
-```
-
-## Step 8 — Deploy
-
+### Step 5 — Deploy & Verify
 ```bash
 func azure functionapp publish lambda-project-2-fn
+curl "https://lambda-project-2-fn.azurewebsites.net/api/hello?code=<function-key>"
 ```
 
-## Step 9 — Verify
-
-```bash
-curl https://lambda-project-2-fn.azurewebsites.net/api/hello
-az monitor app-insights component show --app lambda-project-2-fn --resource-group lambda-project-2-rg
-```
-
-## Step 10 — Decommission Lambda
-
+### Step 6 — Decommission Lambda
 ```bash
 aws lambda delete-function --function-name lambda-project-2 --region us-east-1
 aws iam detach-role-policy --role-name lambda-execution-role --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
