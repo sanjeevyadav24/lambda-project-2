@@ -1,0 +1,7 @@
+.env
+local.settings.json
+__pycache__/
+*.pyc
+function.zip
+package/
+response.json
